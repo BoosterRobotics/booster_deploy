@@ -54,7 +54,7 @@ Booster Deploy is a lightweight deployment framework that supports running contr
      ```bash
      cd booster_robotics_sdk
      mkdir build && cd build
-     cmake .. -DBUILD_PYTHON_BINDINGS=ON
+     cmake .. -DBUILD_PYTHON_BINDING=ON
      make -j$(nproc)
      sudo make install
      ```
