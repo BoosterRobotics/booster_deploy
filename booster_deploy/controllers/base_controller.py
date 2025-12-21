@@ -1,5 +1,7 @@
 from __future__ import annotations
 from abc import abstractmethod
+import inspect
+import os
 import torch
 
 from .controller_cfg import (
@@ -26,6 +28,7 @@ class RobotData:
         num_joints = len(self.cfg.joint_names)
         self.real2sim_joint_indexes = [cfg.joint_names.index(name) for name in cfg.sim_joint_names]
         self.sim2real_joint_indexes = [cfg.sim_joint_names.index(name) for name in cfg.joint_names]
+        self.device = "cpu"
 
         self.joint_pos: torch.Tensor = torch.zeros(num_joints, dtype=torch.float32)
         self.joint_vel: torch.Tensor = torch.zeros(num_joints, dtype=torch.float32)
@@ -34,6 +37,16 @@ class RobotData:
         self.root_ang_vel_b: torch.Tensor = torch.zeros(3, dtype=torch.float32)
         self.root_pos_w: torch.Tensor = torch.zeros(3, dtype=torch.float32)
         self.root_quat_w: torch.Tensor = torch.zeros(4, dtype=torch.float32)
+
+    def to(self, device: torch.device | str) -> None:
+        self.device = device
+        self.joint_pos = self.joint_pos.to(device)
+        self.joint_vel = self.joint_vel.to(device)
+        self.feedback_torque = self.feedback_torque.to(device)
+        self.root_lin_vel_b = self.root_lin_vel_b.to(device)
+        self.root_ang_vel_b = self.root_ang_vel_b.to(device)
+        self.root_pos_w = self.root_pos_w.to(device)
+        self.root_quat_w = self.root_quat_w.to(device)
 
 
 class BoosterRobot:
@@ -86,6 +99,9 @@ class Policy:
     def __init__(self, cfg: PolicyCfg, controller: BaseController):
         self.cfg = cfg
         self.controller = controller
+        # Get the module path of the actual class (works for subclasses too)
+        class_module = inspect.getmodule(self.__class__)
+        self.task_path = os.path.dirname(class_module.__file__)  # type: ignore
 
     @abstractmethod
     def reset(self) -> None:

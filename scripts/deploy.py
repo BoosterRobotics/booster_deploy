@@ -14,8 +14,11 @@ parser.add_argument("--net", type=str, default="127.0.0.1",
                     help="Network interface for SDK communication.")
 parser.add_argument("--mujoco", action="store_true", default=False,
                     help="deploy in mujoco simulation")
-parser.add_argument("--webots", action="store_true", default=False, 
+parser.add_argument("--webots", action="store_true", default=False,
                     help="deploy in webots simulation")
+parser.add_argument(
+    "--device", type=str, default="cpu",
+    help="Device to run the evaluation on (e.g., 'cpu', 'cuda')")
 args = parser.parse_args()
 
 
@@ -47,6 +50,9 @@ def main():
         print(f"Unknown task '{args.task}'. Available tasks: {list(list_tasks().keys())}")
         sys.exit(1)
 
+    # Set device for policy
+    task_cfg.policy.device = args.device
+
     # decide how to run based on flags
     if args.mujoco:
         # run mujoco controller
@@ -66,7 +72,7 @@ def main():
             )
             sys.exit(1)
 
-          # adjust ankle dampings for webots
+        # adjust ankle dampings for webots
         if args.webots:
             ankles = [-8, -7, -2, -1]  # indices of ankle joints
             for i in ankles:

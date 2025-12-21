@@ -1,5 +1,6 @@
 from typing import Callable, List, Optional
 from dataclasses import MISSING
+import torch
 
 from ..utils.isaaclab.configclass import configclass
 
@@ -18,7 +19,9 @@ class MujocoControllerCfg:
     decimation: int = 10
     # physics_dt will automatically be set by ControllerCfg
     physics_dt: float = None  # type: ignore
-    save_states: bool = False
+    log_states: Optional[str] = None
+    visualize_reference_ghost: bool = False
+    ghost_rgba: List[float] = [0.2, 0.8, 0.2, 0.25]
 
 
 @configclass
@@ -42,8 +45,6 @@ class RobotCfg:
 
     default_joint_pos: List[float] = MISSING
     effort_limit: List[float] = MISSING
-
-    parallel_joint_indices: List[int] = MISSING
 
     mjcf_path: str = MISSING
 
@@ -69,6 +70,9 @@ class VelocityCommandCfg:
 @configclass
 class PolicyCfg:
     constructor: Callable = MISSING
+    checkpoint_path: str = MISSING
+    enable_safety_fallback: bool = True
+    device: str | torch.device = "cpu"
 
 
 @configclass

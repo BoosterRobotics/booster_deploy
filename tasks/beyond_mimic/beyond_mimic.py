@@ -1,6 +1,7 @@
 from __future__ import annotations
 from dataclasses import MISSING
 import os
+import inspect
 import torch
 
 from booster_deploy.controllers.base_controller import BaseController, Policy
@@ -19,23 +20,30 @@ class BeyondMimicPolicy(Policy):
     def __init__(self, cfg: BeyondMimicPolicyCfg, controller: BaseController):
         super().__init__(cfg, controller)
         self.cfg = cfg
-        task_path = os.path.dirname(__file__)
         self._model: torch.jit.ScriptModule = torch.jit.load(
-            f"{task_path}/{self.cfg.checkpoint_path}")
-        self._model.eval()
+            f"{self.task_path}/{self.cfg.checkpoint_path}")
+        self._model.to(self.cfg.device).eval()
 
         self.robot = controller.robot
 
         self.action_scale = (
             0.25 * self.robot.effort_limit / self.robot.joint_stiffness
-        )
+        ).to(self.cfg.device)
+
+        self.robot.data.to(self.cfg.device)
 
         self.motion = MotionLoader(
-            motion_file=f"{task_path}/{self.cfg.motion_path}",
-            body_names=self.robot.cfg.sim_body_names,
+            motion_file=f"{self.task_path}/{self.cfg.motion_path}",
             track_body_names=[self.cfg.anchor_body_name],
+            track_joint_names=self.robot.cfg.sim_joint_names,
+            default_motion_body_names=self.robot.cfg.sim_body_names,
+            default_motion_joint_names=self.robot.cfg.sim_joint_names,
             align_to_first_frame=True,
+            device=self.cfg.device
         )
+
+        self.default_joint_pos = self.robot.default_joint_pos.to(
+            self.cfg.device)
 
     def reset(self) -> None:
         self.init_root_yaw_quat_w_inv = lab_math.quat_inv(
@@ -44,7 +52,9 @@ class BeyondMimicPolicy(Policy):
             self.cfg.anchor_body_name)
         self.current_frame = 0
         self.last_action = torch.zeros(
-            self.robot.num_joints, dtype=torch.float32)
+            self.robot.num_joints,
+            dtype=torch.float32, device=self.cfg.device)
+        self.motion.to(self.cfg.device)
 
     def _set_command(self):
         row_ids = min(self.current_frame, self.motion.time_step_total - 1)
@@ -78,7 +88,7 @@ class BeyondMimicPolicy(Policy):
 
         real2sim_map = self.robot.data.real2sim_joint_indexes
         dof_pos = self.robot.data.joint_pos[real2sim_map]
-        joint_pos = dof_pos - self.robot.default_joint_pos[real2sim_map]
+        joint_pos = dof_pos - self.default_joint_pos[real2sim_map]
         joint_vel = self.robot.data.joint_vel[real2sim_map]
 
         obs = torch.cat(
@@ -108,16 +118,41 @@ class BeyondMimicPolicy(Policy):
             obs = self.compute_observation()
             action = self._model(obs).flatten()
 
+        # for motion visualization in Mujoco controller
+        if hasattr(self.controller, "set_reference_qpos"):
+            joint_pos = self.cmd_dof_pos[self.robot.data.sim2real_joint_indexes]
+            ref_qpos = torch.cat(
+                [self.cmd_root_pos_w, self.cmd_root_quat_w, joint_pos],
+                dim=0,
+            )
+            self.controller.set_reference_qpos(ref_qpos)    # type: ignore
+
         self.current_frame += 1
         self.last_action = action
 
         if action is None:
             raise RuntimeError("Underlying model returned None from inference")
 
+        if self.cfg.enable_safety_fallback:
+            # monitor policy state validity during execution.
+            gravity_w = torch.tensor([0.0, 0.0, -1.0], dtype=torch.float32,
+                                     device=self.cfg.device)
+            projected_gravity = lab_math.quat_apply_inverse(
+                self.robot.data.root_quat_w, gravity_w)
+            motion_projected_gravity = lab_math.quat_apply_inverse(
+                self.cmd_root_quat_w, gravity_w)
+
+            if torch.dot(projected_gravity, motion_projected_gravity) < 0.5:
+                print("\nLarge root tracking error is detected, stopping policy"
+                      " for safety. You can disable safety fallback by setting "
+                      f"{self.cfg.__class__.__name__}.enable_safety_fallback "
+                      "to False.")
+                self.controller.stop()
+
         sim2real_map = self.robot.data.sim2real_joint_indexes
         return (
             action[sim2real_map] * self.action_scale
-            + self.robot.default_joint_pos
+            + self.default_joint_pos
         )
 
 
@@ -152,4 +187,5 @@ class K1BeyondMimicControllerCfg(ControllerCfg):
     policy: BeyondMimicPolicyCfg = BeyondMimicPolicyCfg()
     mujoco = MujocoControllerCfg(
         init_pos=[0.0, 0.0, 0.57],
+        visualize_reference_ghost=True,
     )

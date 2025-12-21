@@ -304,23 +304,25 @@ class BoosterRobotPortal:
 
         if self.exit_event.is_set():
             return False
-        prepare_state = self.robot.cfg.prepare_state
-        for i in range(self.robot.num_joints):
-            self.motor_cmd[i].q = float(prepare_state.joint_pos[i])
-            self.motor_cmd[i].kp = float(prepare_state.stiffness[i])
-            self.motor_cmd[i].kd = float(prepare_state.damping[i])
 
         while rclpy.ok() and self.low_cmd_publisher.get_subscription_count() == 0:
             self.logger.info("Waiting for '/joint_ctrl' subscriber, retry in 0.5s")
             time.sleep(0.5)
 
-        self.logger.info("Subscriber found, start control loop")
+        self.logger.info("Subscriber found, starting control loop")        
+
+        prepare_state = self.robot.cfg.prepare_state
+        init_joint_pos = self.synced_state.read()[0]['joint_pos']
+        for i in range(self.robot.num_joints):
+            self.motor_cmd[i].q = init_joint_pos[i]
+            self.motor_cmd[i].kp = float(prepare_state.stiffness[i])
+            self.motor_cmd[i].kd = float(prepare_state.damping[i])
+
         self.low_cmd_publisher.publish(self.low_cmd)
         time.sleep(0.1)
 
         # change to custom mode
         self.client.ChangeMode(RobotMode.kCustom)
-        time.sleep(0.5)
         # for i in range(20):  # try multiple times to make sure mode is changed
         #     self.client.ChangeMode(RobotMode.kCustom)
         #     time.sleep(0.5)
@@ -330,6 +332,14 @@ class BoosterRobotPortal:
         #     self.logger.error("Failed to switch to custom mode")
         #     return False
 
+        trans = np.linspace(init_joint_pos, prepare_state.joint_pos, num=500)
+        start_time = self.timer.get_time()
+        for i in range(500):
+            for j in range(self.robot.num_joints):
+                self.motor_cmd[j].q = trans[i][j]
+            self.low_cmd_publisher.publish(self.low_cmd)
+            while self.timer.get_time() < start_time + (i + 1) * 0.002:
+                time.sleep(0.0002)
         self.logger.info("Custom mode started, initialized with prepare pose")
         return True
 
@@ -484,24 +494,31 @@ class BoosterRobotController(BaseController):
         state = self.portal.synced_state.read()[0]
 
         self.robot.data.joint_pos = torch.from_numpy(
-            state["joint_pos"]).to(dtype=torch.float32)
+            state["joint_pos"]).to(dtype=torch.float32).to(
+                self.robot.data.device)
         self.robot.data.joint_vel = torch.from_numpy(
-            state["joint_vel"]).to(dtype=torch.float32)
+            state["joint_vel"]).to(dtype=torch.float32).to(
+                self.robot.data.device)
         self.robot.data.feedback_torque = torch.from_numpy(
-            state["feedback_torque"]).to(dtype=torch.float32)
+            state["feedback_torque"]).to(dtype=torch.float32).to(
+                self.robot.data.device)
         self.robot.data.root_pos_w = torch.from_numpy(
-            state["root_pos_w"]).to(dtype=torch.float32)
-        rpy_t = torch.from_numpy(state["root_rpy_w"]).to(dtype=torch.float32)
+            state["root_pos_w"]).to(dtype=torch.float32).to(
+                self.robot.data.device)
+        rpy_t = torch.from_numpy(state["root_rpy_w"]).to(
+            dtype=torch.float32).to(self.robot.data.device)
         self.robot.data.root_quat_w = lab_math.quat_from_euler_xyz(
             *rpy_t
         ).squeeze()
         self.robot.data.root_lin_vel_b = lab_math.quat_apply_inverse(
             self.robot.data.root_quat_w,
             torch.from_numpy(
-                state["root_lin_vel_w"]).to(dtype=torch.float32)
+                state["root_lin_vel_w"]).to(dtype=torch.float32).to(
+                    self.robot.data.device)
         )
         self.robot.data.root_ang_vel_b = torch.from_numpy(
-            state["root_ang_vel_b"]).to(dtype=torch.float32)
+            state["root_ang_vel_b"]).to(dtype=torch.float32).to(
+                self.robot.data.device)
 
     def ctrl_step(self, dof_targets: torch.Tensor) -> None:
         for i in range(self.robot.num_joints):
